@@ -15,13 +15,84 @@ func (n *Node) doFollower() stateFunction {
 	// Hint: perform any initial work, and then consider what a node in the
 	// follower state should do when it receives an incoming message on every
 	// possible channel.
+	timeout := randomTimeout(n.config.ElectionTimeout)
+
 	for {
 		select {
 		case shutdown := <-n.gracefulExit:
 			if shutdown {
 				return nil
 			}
+		case msg := <-n.appendEntries:
+			n.handleAppendEntries(msg)
+		case msg := <-n.requestVote:
+			n.handleVote(msg)
+		case msg := <-n.clientRequest:
+			n.handleBadClientRequest(msg)
+		case <-timeout:
+            return n.doCandidate
 		}
+	}
+}
+
+func (n *Node) handleVote(msg RequestVoteMsg){
+	request := msg.request
+	reply := msg.reply
+	vote := true
+
+	followerElectionTerm := n.GetCurrentTerm()
+	followerIndex := n.LastLogIndex()
+	followerTerm := n.GetLog(followerIndex).TermId
+
+	candidate := request.Candidate
+	candidateElectionTerm := request.Term
+	candidateIndex := request.LastLogIndex
+	candidateTerm := request.LastLogTerm
+
+	// Manage Election Terms
+	if followerElectionTerm < candidateElectionTerm {
+		n.SetCurrentTerm(candidateElectionTerm)
+		n.setVotedFor("")
+	}
+	if followerElectionTerm > candidateElectionTerm {
+		vote = false
+	}
+
+	// Determine Vote
+	if n.GetVotedFor() != "" && n.GetVotedFor() != candidate.Id {
+		vote = false
+	}
+	if followerTerm > candidateTerm {
+		vote = false
+	}
+	if followerTerm == candidateTerm && followerIndex > candidateIndex {
+		vote = false
+	}
+	if vote == true {
+		n.setVotedFor(candidate.Id)
+		n.lastHeardFromLeader.Store(time.Now().UnixNano())
+	}
+
+	reply <- RequestVoteReply{
+		Term:		 n.GetCurrentTerm(),
+		VoteGranted: vote,
+	}
+}
+
+func (n *Node) handleBadClientRequest(msg ClientRequestMsg) {
+	request := msg.request
+	reply := msg.reply
+
+	leader := n.getLeader()
+	if leader == nil {
+		leader = n.Self
+	}
+
+	reply <- ClientReply{
+		Status:     ClientStatus_NOT_LEADER,
+		ClientId:   request.ClientId,
+		Response: 	nil,
+		LeaderHint: leader,
 	}
 }
 

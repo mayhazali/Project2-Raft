@@ -9,7 +9,28 @@ func (n *Node) doCandidate() stateFunction {
 	// Hint: perform any initial work, and then consider what a node in the
 	// candidate state should do when it receives an incoming message on every
 	// possible channel.
-	return nil
+	for {
+		select {
+		case shutdown := <-n.gracefulExit:
+			if shutdown {
+				return nil
+			}
+		case msg := <-n.appendEntries:
+			_, fallback := n.handleAppendEntries(msg)
+			if fallback {
+				return n.doFollower
+			}
+		case msg := <-n.requestVote:
+			fallback := n.handleRequestVote(msg)
+			if fallback {
+				return n.doFollower
+			}
+		case msg := <-n.clientRequest:
+			n.handleBadClientRequest(msg)
+		case <-timeout:
+            return n.doCandidate
+		}
+	}
 }
 
 // requestVotes is called to request votes from all other nodes. It takes in a
@@ -24,5 +45,14 @@ func (n *Node) requestVotes(currTerm uint64) (fallback, electionResult bool) {
 // should fall back to the follower state, false otherwise.
 func (n *Node) handleRequestVote(msg RequestVoteMsg) (fallback bool) {
 	// TODO: Students should implement this method
-	return true
+	fallback = false
+	selfElectionTerm := n.GetCurrentTerm()
+	candidateElectionTerm := msg.request.Term
+	
+	if selfElectionTerm < candidateElectionTerm {
+		fallback = true
+	}
+
+	n.handleVote(msg)
+	return fallback
 }
